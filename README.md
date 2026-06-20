@@ -190,3 +190,26 @@ This lets PAs, PGs, Learning Ambassadors, AMs, OMs, Senior OMs, and GMs view ass
 - Certifications
 
 Idle time updates when an associate clocks in, completes a task, is assigned a station, or is marked active by leadership.
+
+
+## Version 3.1.1 Associate Assignment Hotfix
+
+New commands:
+
+- `/assign_associate`
+- `/transfer_associate`
+- `/remove_assignment`
+- `/assignment_help`
+
+Example:
+
+`/assign_associate user:@associate area:Transship shift:Front Half Nights`
+
+This assigns:
+
+- Department: Ship Dock
+- Area: Transship
+- Shift: Front Half Nights
+- Assignment: Transship Associate
+
+This makes `/who_is_my_manager`, `/department_leadership`, `/lookup_associate`, and `/idle_report` work properly for regular associates.

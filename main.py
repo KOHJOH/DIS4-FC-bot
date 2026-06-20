@@ -1783,6 +1783,178 @@ async def lookup_help(interaction: discord.Interaction):
         ephemeral=True
     )
 
+
+
+
+# =========================
+# VERSION 3.1.1 ASSOCIATE ASSIGNMENT HOTFIX
+# =========================
+
+ASSOCIATE_AREAS = [
+    "Shipping Sorter",
+    "Transship",
+    "Flow Lead",
+    "Quality",
+    "TDR Operator",
+    "Shipping Clerk",
+    "Lower Mezzanine",
+    "Upper Mezzanine",
+    "VRETS",
+
+    "Pick Floor 1",
+    "Pick Floor 2",
+    "Pick Floor 3",
+
+    "Stow Floor 1",
+    "Stow Floor 2",
+    "Stow Floor 3",
+
+    "Pack Singles",
+    "AFE Pack",
+    "AFE Induct",
+    "AFE Rebin",
+    "SLAM",
+
+    "Receive Dock",
+    "Decant",
+    "Inbound Problem Solve",
+
+    "ICQA",
+    "SRC",
+    "SBC",
+    "Cycle Count",
+
+    "Learning",
+    "Safety",
+    "PXT / HR",
+    "Non-Inventory"
+]
+
+def can_assign_associate(actor, area):
+    actor_profile = get_profile(actor.id)
+
+    if is_owner(actor):
+        return True
+
+    if actor_profile.get("rank") in ["L7 Senior Operations Manager", "L8 General Manager"]:
+        return True
+
+    if has_department_authority(actor, area):
+        return True
+
+    # PAs can assign within their own area only.
+    if actor_profile.get("rank") == "T3 Process Assistant":
+        return actor_profile.get("area") == area
+
+    return False
+
+@bot.tree.command(name="assign_associate", description="Leadership: assign an associate to a department area and shift.")
+async def assign_associate(interaction: discord.Interaction, user: discord.Member, area: str, shift: str = "Unassigned"):
+    if area not in ASSOCIATE_AREAS:
+        options = "\n".join([f"- {x}" for x in ASSOCIATE_AREAS])
+        await interaction.response.send_message(f"❌ Invalid area.\n\nValid areas:\n{options}", ephemeral=True)
+        return
+
+    if shift not in list(SHIFTS.keys()) + ["Unassigned"]:
+        await interaction.response.send_message("❌ Invalid shift. Use `Front Half Nights`, `Back Half Nights`, or `Unassigned`.", ephemeral=True)
+        return
+
+    if not can_assign_associate(interaction.user, area):
+        await interaction.response.send_message("❌ You do not have authority to assign associates to that area.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    p["rank"] = p.get("rank", "T1 Fulfillment Associate")
+    if p["rank"] == "New Hire":
+        p["rank"] = "T1 Fulfillment Associate"
+
+    p["area"] = area
+    p["department"] = department_from_area(area)
+    p["assignment"] = f"{area} Associate"
+    p["shift"] = shift
+    p["current_station"] = area
+    p["station_status"] = "Assigned"
+
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(
+        f"✅ {user.mention} assigned successfully.\n\n"
+        f"Department: **{p['department']}**\n"
+        f"Area: **{area}**\n"
+        f"Shift: **{shift}**"
+    )
+
+@bot.tree.command(name="transfer_associate", description="Leadership: transfer an associate to a new department area.")
+async def transfer_associate(interaction: discord.Interaction, user: discord.Member, new_area: str, reason: str = "Operational need"):
+    if new_area not in ASSOCIATE_AREAS:
+        options = "\n".join([f"- {x}" for x in ASSOCIATE_AREAS])
+        await interaction.response.send_message(f"❌ Invalid area.\n\nValid areas:\n{options}", ephemeral=True)
+        return
+
+    if not can_assign_associate(interaction.user, new_area):
+        await interaction.response.send_message("❌ You do not have authority to transfer associates to that area.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    old_department = p.get("department", "Unassigned")
+    old_area = p.get("area", "Unassigned")
+
+    p["area"] = new_area
+    p["department"] = department_from_area(new_area)
+    p["assignment"] = f"{new_area} Associate"
+    p["current_station"] = new_area
+    p["station_status"] = "Transferred"
+
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(
+        f"🔁 **Associate Transfer Complete**\n\n"
+        f"Associate: {user.mention}\n"
+        f"From: **{old_department} / {old_area}**\n"
+        f"To: **{p['department']} / {new_area}**\n"
+        f"Reason: {reason}"
+    )
+
+@bot.tree.command(name="remove_assignment", description="Leadership: remove an associate's department/area assignment.")
+async def remove_assignment(interaction: discord.Interaction, user: discord.Member, reason: str = "Assignment removed"):
+    target = get_profile(user.id)
+    old_area = target.get("area", "Unassigned")
+
+    if old_area != "Unassigned" and not can_assign_associate(interaction.user, old_area):
+        await interaction.response.send_message("❌ You do not have authority over this associate's current area.", ephemeral=True)
+        return
+
+    old_department = target.get("department", "Unassigned")
+
+    target["department"] = "Unassigned"
+    target["area"] = "Unassigned"
+    target["assignment"] = "Unassigned"
+    target["current_station"] = "Unassigned"
+    target["station_status"] = "Unassigned"
+
+    update_profile(user.id, target)
+
+    await interaction.response.send_message(
+        f"🗑️ **Assignment Removed**\n\n"
+        f"Associate: {user.mention}\n"
+        f"Previous Department: **{old_department}**\n"
+        f"Previous Area: **{old_area}**\n"
+        f"Reason: {reason}"
+    )
+
+@bot.tree.command(name="assignment_help", description="View associate assignment commands and valid areas.")
+async def assignment_help(interaction: discord.Interaction):
+    areas = "\n".join([f"• {x}" for x in ASSOCIATE_AREAS])
+
+    await interaction.response.send_message(
+        "📌 **Associate Assignment Commands**\n\n"
+        "`/assign_associate user:@associate area:Transship shift:Front Half Nights`\n"
+        "`/transfer_associate user:@associate new_area:Shipping Sorter reason:CPT recovery`\n"
+        "`/remove_assignment user:@associate reason:Moved to flex pool`\n\n"
+        "**Valid Areas:**\n" + areas,
+        ephemeral=True
+    )
+
 if not DISCORD_TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN in .env")
 
