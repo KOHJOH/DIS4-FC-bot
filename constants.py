@@ -16,11 +16,30 @@ RANKS = [
 T3_PLUS_RANKS = RANKS[4:]
 
 TRAINING_CERTS = [
-    "Pick", "Stow", "Receive Dock", "Decant",
+    # Department certs
+    "Pick", "Stow", "Receive Dock", "Decant", "Ship Dock", "ICQA",
     "Pack Singles", "AFE Pack", "AFE Induct", "AFE Rebin", "SLAM",
-    "Ship Dock", "Induct", "Rebin", "Transship", "VRETS",
-    "Problem Solve", "Inbound Problem Solve",
-    "PIT Operator", "TDR Operator", "Tote Runner", "Amnesty"
+
+    # Equipment certs
+    "PIT Operator", "TDR Operator", "AFM",
+
+    # Leadership / support certs
+    "Learning Ambassador", "Process Guide", "Flow Lead",
+    "Tote Runner", "Water Spider",
+
+    # Problem Solve certs
+    "Pick Problem Solve", "Stow Problem Solve", "AFE Problem Solve",
+    "Inbound Problem Solve", "ICQA Problem Solve", "Dock Problem Solve",
+    "Problem Solve",
+
+    # Ship Dock certs
+    "Transship", "VRETS", "Shipping Clerk", "Quality Specialist", "VRETS Specialist",
+
+    # ICQA certs
+    "SRC", "SBC", "Cycle Count",
+
+    # Safety certs
+    "Associate Safety Committee", "Safety Champion"
 ]
 
 ASSIGNMENTS = [
@@ -57,5 +76,30 @@ ASSIGNMENTS = [
 
     "Non-Inventory Manager",
     "Safety Manager",
-    "PXT / HR Manager"
+    "PXT / HR Manager",
+
+    # V3 Ship Dock AM assignments
+    "Shipping Sorter & Transship Manager",
+    "Quality Manager",
+    "Lower & Upper Mezz Manager",
+    "VRETS Manager",
+
+    # V3 Pick AM assignments
+    "Pick Floor 1 Manager",
+    "Pick Floor 2 Manager",
+    "Pick Floor 3 Manager",
+
+    # V3 Stow AM assignments
+    "Stow Floor 1 Manager",
+    "Stow Floor 2 Manager",
+    "Stow Floor 3 Manager",
+
+    # V3 Pack / Inbound / ICQA
+    "Pack Singles Manager",
+    "AFE Manager",
+    "Receive Dock Manager",
+    "Decant Manager",
+    "ICQA Operations Manager",
+    "ICQA Manager",
+    "ICQA PA"
 ]

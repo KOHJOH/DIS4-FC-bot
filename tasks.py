@@ -150,4 +150,42 @@ TASKS = {
             "reward": {"safety": 6, "quality": 4}
         }
     ]
+    ,
+    "ICQA": [
+        {
+            "scenario": "A bin count shows a mismatch between virtual and physical inventory. What do you do?",
+            "choices": ["Create a variance and research the bin", "Ignore the count", "Delete the item"],
+            "answer": 0,
+            "reward": {"quality": 5, "productivity": 3},
+            "area_effect": {"health": 2, "inventory_accuracy": 1, "open_variances": 1}
+        }
+    ],
+    "SRC": [
+        {
+            "scenario": "You are performing a Simple Record Count. What is the correct action?",
+            "choices": ["Count records carefully and report variance", "Guess the count", "Skip hard bins"],
+            "answer": 0,
+            "reward": {"quality": 4, "productivity": 2},
+            "area_effect": {"inventory_accuracy": 1, "bin_quality": 1}
+        }
+    ],
+    "SBC": [
+        {
+            "scenario": "You are performing a Simple Bin Count and find an unexpected item. What do you do?",
+            "choices": ["Record the variance accurately", "Hide the item", "Ignore it"],
+            "answer": 0,
+            "reward": {"quality": 4},
+            "area_effect": {"inventory_accuracy": 1, "open_variances": 1}
+        }
+    ],
+    "Cycle Count": [
+        {
+            "scenario": "A cycle count is requested for a high-value bin. What do you do?",
+            "choices": ["Perform a careful count and escalate discrepancies", "Rush through it", "Mark all items missing"],
+            "answer": 0,
+            "reward": {"quality": 6, "leadership": 1},
+            "area_effect": {"inventory_accuracy": 2, "bin_quality": 2}
+        }
+    ]
+
 }

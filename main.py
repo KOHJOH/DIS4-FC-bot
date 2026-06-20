@@ -5,7 +5,7 @@ import random, time
 from datetime import datetime
 
 from config import DISCORD_TOKEN, BOT_OWNER_ID, TASK_COOLDOWN
-from database import setup_database, get_profile, update_profile
+from database import setup_database, get_profile, update_profile, list_profiles
 from constants import RANKS, T3_PLUS_RANKS, TRAINING_CERTS, ASSIGNMENTS
 from health import PICK_FLOORS, STOW_FLOORS, DEPARTMENT_HEALTH, clamp_area
 from tasks import TASKS
@@ -107,6 +107,9 @@ async def profile(interaction: discord.Interaction, user: discord.Member = None)
     embed.add_field(name="Productivity", value=p["productivity"], inline=True)
     embed.add_field(name="Quality", value=f"{p['quality']}%", inline=True)
     embed.add_field(name="Safety", value=f"{p['safety']}%", inline=True)
+    embed.add_field(name="Shift", value=p.get("shift", "Unassigned"), inline=True)
+    embed.add_field(name="Area", value=p.get("area", "Unassigned"), inline=True)
+    embed.add_field(name="Morale", value=f"{p.get('morale', 100)}%", inline=True)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="certificates", description="View training certificates.")
@@ -375,11 +378,16 @@ async def answer(interaction: discord.Interaction, choice: int):
             clamp_area(area)
 
         p["department"] = department
+        p["last_activity_time"] = time.time()
+        p["current_station"] = department
+        p["station_status"] = "Recently Active"
         update_profile(user_id, p)
         await interaction.response.send_message("✅ **Task completed successfully.**")
     else:
         p["quality"] = max(0, p["quality"] - 2)
         p["safety"] = max(0, p["safety"] - 1)
+        p["last_activity_time"] = time.time()
+        p["station_status"] = "Task Failed"
         update_profile(user_id, p)
         await interaction.response.send_message("❌ **Task failed.** Quality -2 | Safety -1")
 
@@ -394,6 +402,8 @@ async def clockin(interaction: discord.Interaction):
         return
     p["clocked_in"] = True
     p["clockin_time"] = time.time()
+    p["last_activity_time"] = time.time()
+    p["station_status"] = "Clocked In"
     update_profile(interaction.user.id, p)
     await interaction.response.send_message(f"✅ {interaction.user.mention} clocked in.")
 
@@ -406,6 +416,8 @@ async def clockout(interaction: discord.Interaction):
     shift_minutes = round((time.time() - p.get("clockin_time", time.time())) / 60)
     p["clocked_in"] = False
     p["clockin_time"] = None
+    p["station_status"] = "Clocked Out"
+    p["current_station"] = "Unassigned"
     p["total_minutes_worked"] = p.get("total_minutes_worked", 0) + shift_minutes
     p["weekly_minutes"] = p.get("weekly_minutes", 0) + shift_minutes
     p["weekly_shifts"] = p.get("weekly_shifts", 0) + 1
@@ -424,8 +436,8 @@ async def cpt(interaction: discord.Interaction):
 
 @bot.tree.command(name="labor_move", description="Leadership moves labor between areas.")
 async def labor_move(interaction: discord.Interaction, from_area: str, to_area: str, associates: int, reason: str):
-    if not has_leadership_permission(interaction.user):
-        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+    if not has_department_authority(interaction.user, from_area) and not has_department_authority(interaction.user, to_area):
+        await interaction.response.send_message("❌ You do not have authority over either of those areas.", ephemeral=True)
         return
     if to_area in DEPARTMENT_HEALTH:
         DEPARTMENT_HEALTH[to_area]["health"] = min(100, DEPARTMENT_HEALTH[to_area]["health"] + associates * 2)
@@ -491,8 +503,8 @@ async def review(interaction: discord.Interaction, user: discord.Member):
 
 @bot.tree.command(name="flow", description="View outbound flow dashboard.")
 async def flow(interaction: discord.Interaction):
-    if not has_leadership_permission(interaction.user):
-        await interaction.response.send_message("❌ Flow dashboard is leadership only.", ephemeral=True)
+    if not has_department_authority(interaction.user):
+        await interaction.response.send_message("❌ Flow dashboard is restricted to leadership only.", ephemeral=True)
         return
     pick_avg = round(sum(f["health"] for f in PICK_FLOORS.values()) / len(PICK_FLOORS))
     pack_avg = round((DEPARTMENT_HEALTH["Pack Singles"]["health"] + DEPARTMENT_HEALTH["AFE Pack"]["health"]) / 2)
@@ -649,6 +661,151 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+
+
+
+# =========================
+# VERSION 2.1 DEPARTMENT OM AUTHORITY
+# =========================
+
+DEPARTMENT_AUTHORITY = {
+    "Ship Dock Operations Manager": [
+        "Shipping Sorter",
+        "Transship",
+        "Ship Dock",
+        "Lower Mezzanine",
+        "Upper Mezzanine",
+        "Quality",
+        "VRETS",
+        "TDR Operator",
+        "Flow Desk"
+    ],
+    "Pick Operations Manager": [
+        "Pick",
+        "Pick Floor 1",
+        "Pick Floor 2",
+        "Pick Floor 3",
+        "Tote Runner",
+        "Amnesty"
+    ],
+    "Stow Operations Manager": [
+        "Stow",
+        "Stow Floor 1",
+        "Stow Floor 2",
+        "Stow Floor 3",
+        "Amnesty"
+    ],
+    "Pack Operations Manager": [
+        "Pack Singles",
+        "AFE Pack",
+        "AFE Induct",
+        "AFE Rebin",
+        "SLAM"
+    ],
+    "Inbound Operations Manager": [
+        "Receive Dock",
+        "Decant",
+        "Inbound Problem Solve"
+    ],
+    "Learning Manager": [
+        "Learning",
+        "Learning Trainer"
+    ],
+    "Safety Manager": [
+        "Safety"
+    ],
+    "PXT / HR Manager": [
+        "PXT / HR"
+    ],
+    "Non-Inventory Manager": [
+        "Non-Inventory"
+    ]
+}
+
+def has_department_authority(member, area=None):
+    p = get_profile(member.id)
+    rank = p.get("rank", "New Hire")
+    assignment = p.get("assignment", "Unassigned")
+
+    if rank in ["L7 Senior Operations Manager", "L8 General Manager"]:
+        return True
+
+    if rank == "L6 Operations Manager":
+        if area is None:
+            return assignment in DEPARTMENT_AUTHORITY
+        return area in DEPARTMENT_AUTHORITY.get(assignment, [])
+
+    if rank in ["L4 Area Manager", "L5 Area Manager", "T3 Process Assistant"]:
+        if area is None:
+            return assignment != "Unassigned"
+        return area.lower() in assignment.lower()
+
+    return has_leadership_permission(member)
+
+@bot.tree.command(name="assign_department_om", description="Owner-only: assign an L6 OM over a full department.")
+async def assign_department_om(interaction: discord.Interaction, user: discord.Member, department: str):
+    if not is_owner(interaction.user):
+        await interaction.response.send_message("❌ Only the bot owner can assign department OMs.", ephemeral=True)
+        return
+
+    if department not in DEPARTMENT_AUTHORITY:
+        options = "\n".join([f"- {d}" for d in DEPARTMENT_AUTHORITY.keys()])
+        await interaction.response.send_message(f"❌ Invalid department OM assignment.\n\nValid options:\n{options}", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+
+    if p.get("rank") != "L6 Operations Manager":
+        await interaction.response.send_message("❌ User must be **L6 Operations Manager** first.", ephemeral=True)
+        return
+
+    p["assignment"] = department
+
+    if "Ship Dock" in department:
+        p["department"] = "Ship Dock"
+    elif "Pick" in department:
+        p["department"] = "Pick"
+    elif "Stow" in department:
+        p["department"] = "Stow"
+    elif "Pack" in department:
+        p["department"] = "Pack"
+    elif "Inbound" in department:
+        p["department"] = "Inbound"
+    elif "Learning" in department:
+        p["department"] = "Learning"
+    elif "Safety" in department:
+        p["department"] = "Safety"
+    elif "PXT" in department:
+        p["department"] = "PXT / HR"
+    elif "Non-Inventory" in department:
+        p["department"] = "Non-Inventory"
+
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(
+        f"✅ {user.mention} is now assigned as **{department}**.\n\n"
+        f"Authority Areas:\n" +
+        "\n".join([f"• {area}" for area in DEPARTMENT_AUTHORITY[department]])
+    )
+
+@bot.tree.command(name="my_authority", description="View what areas your assignment controls.")
+async def my_authority(interaction: discord.Interaction):
+    p = get_profile(interaction.user.id)
+    assignment = p.get("assignment", "Unassigned")
+    areas = DEPARTMENT_AUTHORITY.get(assignment, [])
+
+    if not areas:
+        await interaction.response.send_message(
+            f"📌 **Current Assignment:** {assignment}\n\nNo department-wide authority found.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"📌 **Current Assignment:** {assignment}\n\n"
+        f"✅ **You control these areas:**\n" +
+        "\n".join([f"• {area}" for area in areas])
+    )
 
 # =========================
 # VERSION 2.0 OPERATIONS
@@ -940,6 +1097,691 @@ async def setup_channels(interaction: discord.Interaction):
                 created_count += 1
 
     await interaction.response.send_message(f"✅ FC channel layout created/checked. New channels created: **{created_count}**.")
+
+
+
+
+# =========================
+# VERSION 3.0 FC OPERATIONS SIMULATOR
+# =========================
+
+SHIFTS = {
+    "Front Half Nights": "Sunday - Wednesday",
+    "Back Half Nights": "Wednesday - Saturday"
+}
+
+CERTIFICATION_GROUPS = {
+    "Equipment": ["PIT Operator", "TDR Operator", "AFM"],
+    "Leadership": ["Learning Ambassador", "Process Guide", "Flow Lead"],
+    "Problem Solve": ["Pick Problem Solve", "Stow Problem Solve", "AFE Problem Solve", "Inbound Problem Solve", "ICQA Problem Solve", "Dock Problem Solve", "Problem Solve"],
+    "Pick/Stow": ["Pick", "Stow", "Tote Runner", "Water Spider"],
+    "Pack": ["Pack Singles", "AFE Pack", "AFE Induct", "AFE Rebin", "SLAM"],
+    "Ship Dock": ["Ship Dock", "Transship", "VRETS", "Shipping Clerk", "Quality Specialist", "VRETS Specialist"],
+    "Inbound": ["Receive Dock", "Decant"],
+    "ICQA": ["ICQA", "SRC", "SBC", "Cycle Count"],
+    "Safety": ["Associate Safety Committee", "Safety Champion"]
+}
+
+AREA_TO_DEPARTMENT = {
+    "Shipping Sorter": "Ship Dock",
+    "Transship": "Ship Dock",
+    "Flow Lead": "Ship Dock",
+    "Quality": "Ship Dock",
+    "TDR Operator": "Ship Dock",
+    "Shipping Clerk": "Ship Dock",
+    "Lower Mezzanine": "Ship Dock",
+    "Upper Mezzanine": "Ship Dock",
+    "VRETS": "Ship Dock",
+    "Pick Floor 1": "Pick",
+    "Pick Floor 2": "Pick",
+    "Pick Floor 3": "Pick",
+    "Stow Floor 1": "Stow",
+    "Stow Floor 2": "Stow",
+    "Stow Floor 3": "Stow",
+    "Pack Singles": "Pack",
+    "AFE Pack": "Pack",
+    "Receive Dock": "Inbound",
+    "Decant": "Inbound",
+    "ICQA": "ICQA"
+}
+
+AREA_MANAGER_AUTHORITY = {
+    "Shipping Sorter & Transship Manager": ["Shipping Sorter", "Transship", "Flow Lead"],
+    "Quality Manager": ["Quality", "TDR Operator", "Shipping Clerk"],
+    "Lower & Upper Mezz Manager": ["Lower Mezzanine", "Upper Mezzanine"],
+    "VRETS Manager": ["VRETS"],
+    "Pick Floor 1 Manager": ["Pick Floor 1"],
+    "Pick Floor 2 Manager": ["Pick Floor 2"],
+    "Pick Floor 3 Manager": ["Pick Floor 3"],
+    "Stow Floor 1 Manager": ["Stow Floor 1"],
+    "Stow Floor 2 Manager": ["Stow Floor 2"],
+    "Stow Floor 3 Manager": ["Stow Floor 3"],
+    "Pack Singles Manager": ["Pack Singles"],
+    "AFE Manager": ["AFE Pack", "AFE Induct", "AFE Rebin", "SLAM"],
+    "Receive Dock Manager": ["Receive Dock"],
+    "Decant Manager": ["Decant"],
+    "ICQA Manager": ["ICQA", "SRC", "SBC", "Cycle Count"]
+}
+
+PA_ASSIGNMENTS = {
+    "Shipping Sorter PA": "Shipping Sorter",
+    "Transship PA": "Transship",
+    "FLOW Lead PA": "Flow Lead",
+    "Quality PA": "Quality",
+    "Lower Mezzanine PA": "Lower Mezzanine",
+    "Upper Mezzanine PA": "Upper Mezzanine",
+    "VRETS PA": "VRETS",
+    "Pick PA Floor 1": "Pick Floor 1",
+    "Pick PA Floor 2": "Pick Floor 2",
+    "Pick PA Floor 3": "Pick Floor 3",
+    "Stow PA Floor 1": "Stow Floor 1",
+    "Stow PA Floor 2": "Stow Floor 2",
+    "Stow PA Floor 3": "Stow Floor 3",
+    "Pack Singles PA": "Pack Singles",
+    "AFE Pack PA": "AFE Pack",
+    "Receive Dock PA": "Receive Dock",
+    "Decant PA": "Decant",
+    "ICQA PA": "ICQA"
+}
+
+DOCK_DOORS = {str(i): {"status": "Empty", "trailer": "None"} for i in list(range(120, 151)) + list(range(201, 223))}
+
+def department_from_area(area):
+    return AREA_TO_DEPARTMENT.get(area, area)
+
+def get_display_name(guild, user_id):
+    member = guild.get_member(int(user_id)) if guild else None
+    return member.mention if member else f"<@{user_id}>"
+
+def profile_matches_department(profile, department):
+    return profile.get("department") == department or department in profile.get("assignment", "")
+
+def find_leadership(guild, department, area=None, shift=None):
+    leaders = {
+        "PG": [],
+        "PA": [],
+        "AM": [],
+        "OM": [],
+        "Senior OM": [],
+        "GM": []
+    }
+
+    for p in list_profiles():
+        if shift and p.get("shift") not in [shift, "Unassigned", None]:
+            continue
+
+        rank = p.get("rank", "")
+        assignment = p.get("assignment", "")
+        p_department = p.get("department", "")
+        p_area = p.get("area", "")
+
+        same_dept = p_department == department or department in assignment
+        same_area = area and (p_area == area or area in assignment)
+
+        if rank == "Process Guide" and (same_area or same_dept):
+            leaders["PG"].append(p)
+        elif rank == "T3 Process Assistant" and (same_area or same_dept):
+            leaders["PA"].append(p)
+        elif rank in ["L4 Area Manager", "L5 Area Manager"] and (same_area or same_dept):
+            leaders["AM"].append(p)
+        elif rank == "L6 Operations Manager" and same_dept:
+            leaders["OM"].append(p)
+        elif rank == "L7 Senior Operations Manager":
+            leaders["Senior OM"].append(p)
+        elif rank == "L8 General Manager":
+            leaders["GM"].append(p)
+
+    return leaders
+
+@bot.tree.command(name="assign_shift", description="Leadership assigns an associate to FHN or BHN.")
+async def assign_shift(interaction: discord.Interaction, user: discord.Member, shift: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    if shift not in SHIFTS:
+        await interaction.response.send_message("❌ Invalid shift. Use `Front Half Nights` or `Back Half Nights`.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    p["shift"] = shift
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(f"✅ {user.mention} assigned to **{shift}** ({SHIFTS[shift]}).")
+
+@bot.tree.command(name="my_shift", description="View your shift assignment.")
+async def my_shift(interaction: discord.Interaction):
+    p = get_profile(interaction.user.id)
+    shift = p.get("shift", "Unassigned")
+    await interaction.response.send_message(
+        f"🌙 **Shift Info**\n\n"
+        f"Shift: **{shift}**\n"
+        f"Schedule: **{SHIFTS.get(shift, 'Unassigned')}**\n"
+        f"Department: **{p.get('department', 'Unassigned')}**\n"
+        f"Area: **{p.get('area', 'Unassigned')}**"
+    )
+
+@bot.tree.command(name="assign_area_manager", description="Owner-only: assign an L4/L5 AM to an area.")
+async def assign_area_manager(interaction: discord.Interaction, user: discord.Member, area_manager_assignment: str):
+    if not is_owner(interaction.user):
+        await interaction.response.send_message("❌ Owner only.", ephemeral=True)
+        return
+
+    if area_manager_assignment not in AREA_MANAGER_AUTHORITY:
+        options = "\n".join([f"- {x}" for x in AREA_MANAGER_AUTHORITY])
+        await interaction.response.send_message(f"❌ Invalid AM assignment.\n\nValid options:\n{options}", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    if p.get("rank") not in ["L4 Area Manager", "L5 Area Manager"]:
+        await interaction.response.send_message("❌ User must be **L4 Area Manager** or **L5 Area Manager**.", ephemeral=True)
+        return
+
+    areas = AREA_MANAGER_AUTHORITY[area_manager_assignment]
+    p["assignment"] = area_manager_assignment
+    p["area"] = areas[0]
+    p["department"] = department_from_area(areas[0])
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(
+        f"✅ {user.mention} assigned as **{area_manager_assignment}**.\n"
+        f"Authority: " + ", ".join(areas)
+    )
+
+@bot.tree.command(name="assign_pa", description="Owner/AM: assign a T3 PA to an area.")
+async def assign_pa(interaction: discord.Interaction, user: discord.Member, pa_assignment: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    if pa_assignment not in PA_ASSIGNMENTS:
+        options = "\n".join([f"- {x}" for x in PA_ASSIGNMENTS])
+        await interaction.response.send_message(f"❌ Invalid PA assignment.\n\nValid options:\n{options}", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    if p.get("rank") != "T3 Process Assistant":
+        await interaction.response.send_message("❌ User must be **T3 Process Assistant**.", ephemeral=True)
+        return
+
+    area = PA_ASSIGNMENTS[pa_assignment]
+    p["assignment"] = pa_assignment
+    p["area"] = area
+    p["department"] = department_from_area(area)
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(f"✅ {user.mention} assigned as **{pa_assignment}** in **{p['department']}**.")
+
+@bot.tree.command(name="appoint_pg", description="AM/OM: appoint a Process Guide.")
+async def appoint_pg(interaction: discord.Interaction, user: discord.Member, area: str):
+    if not has_department_authority(interaction.user, area):
+        await interaction.response.send_message("❌ You do not have authority over that area.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    p["rank"] = "Process Guide"
+    p["assignment"] = f"{area} Process Guide"
+    p["area"] = area
+    p["department"] = department_from_area(area)
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(f"✅ {user.mention} appointed as **Process Guide** for **{area}**.")
+
+@bot.tree.command(name="grant_certification", description="Leadership grants a certification.")
+async def grant_certification(interaction: discord.Interaction, user: discord.Member, certification: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    if certification not in TRAINING_CERTS:
+        await interaction.response.send_message("❌ Invalid certification.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    if certification not in p["certifications"]:
+        p["certifications"].append(certification)
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(f"✅ {user.mention} granted certification: **{certification}**.")
+
+@bot.tree.command(name="revoke_certification", description="AM/OM revokes a certification.")
+async def revoke_certification(interaction: discord.Interaction, user: discord.Member, certification: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    if certification in p["certifications"]:
+        p["certifications"].remove(certification)
+        update_profile(user.id, p)
+        await interaction.response.send_message(f"✅ Removed **{certification}** from {user.mention}.")
+    else:
+        await interaction.response.send_message("❌ User does not have that certification.", ephemeral=True)
+
+@bot.tree.command(name="certification_directory", description="View everyone with a certification.")
+async def certification_directory(interaction: discord.Interaction, certification: str):
+    matches = [p for p in list_profiles() if certification in p.get("certifications", [])]
+
+    if not matches:
+        await interaction.response.send_message(f"No associates found with **{certification}**.")
+        return
+
+    text = "\n".join([f"• {get_display_name(interaction.guild, p['user_id'])}" for p in matches[:30]])
+    await interaction.response.send_message(f"🎓 **Certification Directory: {certification}**\n\n{text}")
+
+@bot.tree.command(name="department_leadership", description="View leadership in your department or a selected department.")
+async def department_leadership(interaction: discord.Interaction, department: str = None):
+    p = get_profile(interaction.user.id)
+    department = department or p.get("department", "Unassigned")
+    shift = p.get("shift", None)
+
+    if department == "Unassigned":
+        await interaction.response.send_message("❌ You are not assigned to a department yet.", ephemeral=True)
+        return
+
+    leaders = find_leadership(interaction.guild, department, shift=shift)
+
+    embed = discord.Embed(
+        title=f"🏢 {department} Leadership",
+        description=f"Shift Filter: **{shift or 'All'}**",
+        color=discord.Color.orange()
+    )
+
+    for group, profiles in leaders.items():
+        value = "\n".join([f"• {get_display_name(interaction.guild, x['user_id'])} — {x.get('assignment', 'Unassigned')}" for x in profiles]) or "None assigned"
+        embed.add_field(name=group, value=value, inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="who_is_my_manager", description="View your PA, AM, OM, Senior OM, and GM.")
+async def who_is_my_manager(interaction: discord.Interaction):
+    p = get_profile(interaction.user.id)
+    department = p.get("department", "Unassigned")
+    area = p.get("area", "Unassigned")
+    shift = p.get("shift", None)
+
+    if department == "Unassigned":
+        await interaction.response.send_message("❌ You are not assigned to a department yet.", ephemeral=True)
+        return
+
+    leaders = find_leadership(interaction.guild, department, area=area, shift=shift)
+
+    def first_or_none(group):
+        return leaders.get(group, [None])[0]
+
+    pa = first_or_none("PA")
+    am = first_or_none("AM")
+    om = first_or_none("OM")
+    som = first_or_none("Senior OM")
+    gm = first_or_none("GM")
+
+    await interaction.response.send_message(
+        f"👥 **Your Leadership Chain**\n\n"
+        f"Department: **{department}**\n"
+        f"Area: **{area}**\n"
+        f"Shift: **{shift or 'Unassigned'}**\n\n"
+        f"PA: {get_display_name(interaction.guild, pa['user_id']) if pa else 'None assigned'}\n"
+        f"AM: {get_display_name(interaction.guild, am['user_id']) if am else 'None assigned'}\n"
+        f"OM: {get_display_name(interaction.guild, om['user_id']) if om else 'None assigned'}\n"
+        f"Senior OM: {get_display_name(interaction.guild, som['user_id']) if som else 'None assigned'}\n"
+        f"GM: {get_display_name(interaction.guild, gm['user_id']) if gm else 'None assigned'}"
+    )
+
+@bot.tree.command(name="org_chart", description="View the building org chart.")
+async def org_chart(interaction: discord.Interaction):
+    all_profiles = list_profiles()
+
+    def people(rank):
+        return [p for p in all_profiles if p.get("rank") == rank]
+
+    gms = people("L8 General Manager")
+    soms = people("L7 Senior Operations Manager")
+    oms = people("L6 Operations Manager")
+    ams = [p for p in all_profiles if p.get("rank") in ["L4 Area Manager", "L5 Area Manager"]]
+    pas = people("T3 Process Assistant")
+    pgs = people("Process Guide")
+
+    text = "🏢 **DIS4 Fulfillment Center Org Chart**\n\n"
+    text += "**GM**\n" + ("\n".join([f"• {get_display_name(interaction.guild, p['user_id'])}" for p in gms]) or "• None") + "\n\n"
+    text += "**Senior OM**\n" + ("\n".join([f"• {get_display_name(interaction.guild, p['user_id'])}" for p in soms]) or "• None") + "\n\n"
+    text += "**Operations Managers**\n" + ("\n".join([f"• {get_display_name(interaction.guild, p['user_id'])} — {p.get('assignment', 'Unassigned')}" for p in oms]) or "• None") + "\n\n"
+    text += "**Area Managers**\n" + ("\n".join([f"• {get_display_name(interaction.guild, p['user_id'])} — {p.get('assignment', 'Unassigned')}" for p in ams[:15]]) or "• None") + "\n\n"
+    text += f"**PAs:** {len(pas)} active\n"
+    text += f"**PGs:** {len(pgs)} active"
+
+    await interaction.response.send_message(text[:1900])
+
+@bot.tree.command(name="site_status", description="View overall DIS4 site status.")
+async def site_status(interaction: discord.Interaction):
+    pick_avg = round(sum(f["health"] for f in PICK_FLOORS.values()) / len(PICK_FLOORS))
+    stow_avg = round(sum(f["health"] for f in STOW_FLOORS.values()) / len(STOW_FLOORS))
+    pack_avg = round((DEPARTMENT_HEALTH["Pack Singles"]["health"] + DEPARTMENT_HEALTH["AFE Pack"]["health"]) / 2)
+    ship_avg = round(sum(DEPARTMENT_HEALTH[x]["health"] for x in ["Shipping Sorter", "Transship", "Lower Mezzanine", "Upper Mezzanine", "Quality", "VRETS"]) / 6)
+    icqa = DEPARTMENT_HEALTH.get("ICQA", {}).get("health", 100)
+    overall = round((pick_avg + stow_avg + pack_avg + ship_avg + icqa) / 5)
+
+    await interaction.response.send_message(
+        f"🏢 **DIS4 Site Status**\n\n"
+        f"Overall Building Health: **{overall}%**\n\n"
+        f"📦 Pick: **{pick_avg}%**\n"
+        f"📥 Stow: **{stow_avg}%**\n"
+        f"📮 Pack: **{pack_avg}%**\n"
+        f"🚛 Ship Dock: **{ship_avg}%**\n"
+        f"🔎 ICQA: **{icqa}%**\n\n"
+        f"CPT Risk: **{'Low' if overall >= 85 else 'Medium' if overall >= 70 else 'High'}**"
+    )
+
+@bot.tree.command(name="manager_dashboard", description="Manager dashboard for your area or department.")
+async def manager_dashboard(interaction: discord.Interaction):
+    p = get_profile(interaction.user.id)
+
+    if not has_department_authority(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    department = p.get("department", "Unassigned")
+    assignment = p.get("assignment", "Unassigned")
+
+    embed = discord.Embed(
+        title=f"📊 Manager Dashboard — {assignment}",
+        description=f"Department: **{department}**",
+        color=discord.Color.blue()
+    )
+
+    if department == "Ship Dock":
+        for area in ["Shipping Sorter", "Transship", "Lower Mezzanine", "Upper Mezzanine", "Quality", "VRETS"]:
+            stats = DEPARTMENT_HEALTH.get(area, {})
+            embed.add_field(name=area, value=f"Health: **{stats.get('health', 'N/A')}%**", inline=True)
+    elif department == "Pick":
+        for floor, stats in PICK_FLOORS.items():
+            embed.add_field(name=f"Pick {floor}", value=f"Health: **{stats['health']}%**", inline=True)
+    elif department == "Stow":
+        for floor, stats in STOW_FLOORS.items():
+            embed.add_field(name=f"Stow {floor}", value=f"Health: **{stats['health']}%**", inline=True)
+    elif department in DEPARTMENT_HEALTH:
+        stats = DEPARTMENT_HEALTH[department]
+        for k, v in stats.items():
+            embed.add_field(name=k.replace("_", " ").title(), value=str(v), inline=True)
+    else:
+        embed.add_field(name="Status", value="No dashboard data for this department yet.", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="view_doors", description="View Ship Dock door status.")
+async def view_doors(interaction: discord.Interaction):
+    lines = []
+    for door, data in list(DOCK_DOORS.items())[:60]:
+        lines.append(f"Door {door}: **{data['status']}** | Trailer: {data['trailer']}")
+
+    await interaction.response.send_message("🚛 **Dock Doors**\n\n" + "\n".join(lines[:35]))
+
+@bot.tree.command(name="assign_trailer", description="TDR/Clerk: assign a trailer to a dock door.")
+async def assign_trailer(interaction: discord.Interaction, door: str, trailer: str):
+    p = get_profile(interaction.user.id)
+    if "TDR Operator" not in p.get("certifications", []) and "Shipping Clerk" not in p.get("certifications", []) and not has_department_authority(interaction.user, "TDR Operator"):
+        await interaction.response.send_message("❌ Requires TDR Operator or Shipping Clerk certification.", ephemeral=True)
+        return
+
+    if door not in DOCK_DOORS:
+        await interaction.response.send_message("❌ Invalid door. Valid ranges are 120-150 and 201-222.", ephemeral=True)
+        return
+
+    DOCK_DOORS[door]["trailer"] = trailer
+    DOCK_DOORS[door]["status"] = "Assigned"
+
+    await interaction.response.send_message(f"✅ Trailer **{trailer}** assigned to Door **{door}**.")
+
+@bot.tree.command(name="open_door", description="TDR: open a dock door.")
+async def open_door(interaction: discord.Interaction, door: str):
+    p = get_profile(interaction.user.id)
+    if "TDR Operator" not in p.get("certifications", []) and not has_department_authority(interaction.user, "TDR Operator"):
+        await interaction.response.send_message("❌ Requires TDR Operator certification.", ephemeral=True)
+        return
+
+    if door not in DOCK_DOORS:
+        await interaction.response.send_message("❌ Invalid door.", ephemeral=True)
+        return
+
+    DOCK_DOORS[door]["status"] = "Open"
+    await interaction.response.send_message(f"✅ Door **{door}** opened using TDR process.")
+
+@bot.tree.command(name="close_door", description="TDR: close a dock door.")
+async def close_door(interaction: discord.Interaction, door: str):
+    p = get_profile(interaction.user.id)
+    if "TDR Operator" not in p.get("certifications", []) and not has_department_authority(interaction.user, "TDR Operator"):
+        await interaction.response.send_message("❌ Requires TDR Operator certification.", ephemeral=True)
+        return
+
+    if door not in DOCK_DOORS:
+        await interaction.response.send_message("❌ Invalid door.", ephemeral=True)
+        return
+
+    DOCK_DOORS[door]["status"] = "Closed"
+    await interaction.response.send_message(f"✅ Door **{door}** closed using TDR process.")
+
+@bot.tree.command(name="recognize", description="Leadership recognizes an associate.")
+async def recognize(interaction: discord.Interaction, user: discord.Member, reason: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    p = get_profile(user.id)
+    p["morale"] = min(100, p.get("morale", 100) + 10)
+    p["swag_points"] = p.get("swag_points", 0) + 25
+    update_profile(user.id, p)
+
+    await interaction.response.send_message(
+        f"🏆 **Associate Recognition**\n\n"
+        f"Associate: {user.mention}\n"
+        f"Reason: {reason}\n\n"
+        f"+10 Morale\n+25 Swag Points"
+    )
+
+@bot.tree.command(name="time_balance", description="View UPT, PTO, and Vacation.")
+async def time_balance(interaction: discord.Interaction, user: discord.Member = None):
+    target = user or interaction.user
+    p = get_profile(target.id)
+
+    await interaction.response.send_message(
+        f"🕒 **Time Balance: {target.display_name}**\n\n"
+        f"UPT: **{p.get('upt', 20)} hrs**\n"
+        f"PTO: **{p.get('pto', 10)} hrs**\n"
+        f"Vacation: **{p.get('vacation', 0)} hrs**"
+    )
+
+@bot.tree.command(name="use_upt", description="Use UPT hours.")
+async def use_upt(interaction: discord.Interaction, hours: int):
+    p = get_profile(interaction.user.id)
+    p["upt"] = p.get("upt", 20) - max(1, hours)
+    update_profile(interaction.user.id, p)
+
+    status = "⚠️ Negative UPT — Termination Review triggered." if p["upt"] < 0 else "✅ UPT used."
+    await interaction.response.send_message(f"{status}\nCurrent UPT: **{p['upt']} hrs**")
+
+@bot.tree.command(name="shift_handoff", description="Leadership creates a shift handoff note.")
+async def shift_handoff(interaction: discord.Interaction, department: str, notes: str):
+    if not has_leadership_permission(interaction.user):
+        await interaction.response.send_message("❌ Leadership only.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"📋 **Shift Handoff — {department}**\n\n"
+        f"Submitted By: {interaction.user.mention}\n"
+        f"Notes: {notes}\n\n"
+        f"Recommended Follow-Up: Check `/site_status`, `/manager_dashboard`, and `/flow`."
+    )
+
+
+
+
+# =========================
+# VERSION 3.1 PA LOOKUP FEATURE
+# =========================
+
+def format_idle_time(profile):
+    if not profile.get("clocked_in"):
+        return "Not clocked in"
+
+    last = profile.get("last_activity_time") or profile.get("clockin_time")
+    if not last:
+        return "Unknown"
+
+    idle_seconds = max(0, int(time.time() - float(last)))
+    minutes = idle_seconds // 60
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+
+    if hours > 0:
+        return f"{hours}h {remaining_minutes}m"
+    return f"{minutes}m"
+
+def lookup_permission(member, target_profile=None):
+    viewer = get_profile(member.id)
+
+    if viewer.get("rank") in [
+        "T3 Process Assistant",
+        "T3 Learning Trainer",
+        "T3 Non-Inventory Receiver",
+        "L4 Area Manager",
+        "L5 Area Manager",
+        "L6 Operations Manager",
+        "L7 Senior Operations Manager",
+        "L8 General Manager"
+    ]:
+        return True
+
+    if viewer.get("rank") in ["Process Guide", "Learning Ambassador"]:
+        if target_profile:
+            return viewer.get("department") == target_profile.get("department")
+        return True
+
+    return False
+
+@bot.tree.command(name="lookup_associate", description="PA/Leadership: lookup associate details and idle time.")
+async def lookup_associate(interaction: discord.Interaction, user: discord.Member):
+    target = get_profile(user.id)
+
+    if not lookup_permission(interaction.user, target):
+        await interaction.response.send_message("❌ Lookup is restricted to PGs, PAs, Learning Ambassadors, and leadership.", ephemeral=True)
+        return
+
+    idle = format_idle_time(target)
+    certs = target.get("certifications", [])
+    cert_text = ", ".join(certs[:12]) if certs else "None"
+    if len(certs) > 12:
+        cert_text += f" +{len(certs) - 12} more"
+
+    clock_status = "Clocked In" if target.get("clocked_in") else "Clocked Out"
+
+    embed = discord.Embed(
+        title=f"🔎 Associate Lookup — {user.display_name}",
+        description="Internal associate details for leadership use.",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="Rank", value=target.get("rank", "New Hire"), inline=True)
+    embed.add_field(name="Department", value=target.get("department", "Unassigned"), inline=True)
+    embed.add_field(name="Area", value=target.get("area", "Unassigned"), inline=True)
+    embed.add_field(name="Shift", value=target.get("shift", "Unassigned"), inline=True)
+    embed.add_field(name="Assignment", value=target.get("assignment", "Unassigned"), inline=True)
+    embed.add_field(name="Station", value=target.get("current_station", "Unassigned"), inline=True)
+
+    embed.add_field(name="Clock Status", value=clock_status, inline=True)
+    embed.add_field(name="Station Status", value=target.get("station_status", "Idle"), inline=True)
+    embed.add_field(name="Idle Time", value=idle, inline=True)
+
+    embed.add_field(name="Productivity", value=str(target.get("productivity", 0)), inline=True)
+    embed.add_field(name="Quality", value=f"{target.get('quality', 100)}%", inline=True)
+    embed.add_field(name="Safety", value=f"{target.get('safety', 100)}%", inline=True)
+    embed.add_field(name="Attendance", value=f"{target.get('attendance', 100)}%", inline=True)
+    embed.add_field(name="Write-Ups", value=str(target.get("writeups", 0)), inline=True)
+    embed.add_field(name="Morale", value=f"{target.get('morale', 100)}%", inline=True)
+
+    embed.add_field(name="Certifications", value=cert_text, inline=False)
+
+    embed.set_footer(text="V3.1 Lookup Feature • Idle time starts from last task/clock-in")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="set_station", description="PA/Leadership: assign an associate to a station or function.")
+async def set_station(interaction: discord.Interaction, user: discord.Member, station: str):
+    target = get_profile(user.id)
+
+    if not lookup_permission(interaction.user, target):
+        await interaction.response.send_message("❌ Station assignment is restricted to PGs, PAs, and leadership.", ephemeral=True)
+        return
+
+    target["current_station"] = station
+    target["station_status"] = "Assigned"
+    target["last_activity_time"] = time.time()
+    update_profile(user.id, target)
+
+    await interaction.response.send_message(f"✅ {user.mention} assigned to station/function **{station}**.")
+
+@bot.tree.command(name="mark_active", description="PA/Leadership: mark an associate as active after check-in.")
+async def mark_active(interaction: discord.Interaction, user: discord.Member, note: str = "Checked in"):
+    target = get_profile(user.id)
+
+    if not lookup_permission(interaction.user, target):
+        await interaction.response.send_message("❌ Active checks are restricted to PGs, PAs, and leadership.", ephemeral=True)
+        return
+
+    target["last_activity_time"] = time.time()
+    target["station_status"] = f"Active - {note}"
+    update_profile(user.id, target)
+
+    await interaction.response.send_message(f"✅ {user.mention} marked active. Note: **{note}**")
+
+@bot.tree.command(name="idle_report", description="PA/Leadership: view idle associates in your department.")
+async def idle_report(interaction: discord.Interaction, department: str = None):
+    viewer = get_profile(interaction.user.id)
+
+    if not lookup_permission(interaction.user):
+        await interaction.response.send_message("❌ Idle report is restricted to PGs, PAs, and leadership.", ephemeral=True)
+        return
+
+    department = department or viewer.get("department", "Unassigned")
+
+    if department == "Unassigned":
+        await interaction.response.send_message("❌ You are not assigned to a department. Provide a department name.", ephemeral=True)
+        return
+
+    profiles = []
+    for p in list_profiles():
+        if p.get("department") == department and p.get("clocked_in"):
+            profiles.append(p)
+
+    profiles.sort(key=lambda p: float(p.get("last_activity_time") or p.get("clockin_time") or time.time()))
+
+    if not profiles:
+        await interaction.response.send_message(f"✅ No clocked-in associates found for **{department}**.")
+        return
+
+    lines = []
+    for p in profiles[:20]:
+        idle = format_idle_time(p)
+        lines.append(
+            f"• {get_display_name(interaction.guild, p['user_id'])} | "
+            f"Area: **{p.get('area', 'Unassigned')}** | "
+            f"Station: **{p.get('current_station', 'Unassigned')}** | "
+            f"Idle: **{idle}**"
+        )
+
+    await interaction.response.send_message(
+        f"⏱️ **Idle Report — {department}**\n\n" + "\n".join(lines),
+        ephemeral=True
+    )
+
+@bot.tree.command(name="lookup_help", description="View PA lookup feature commands.")
+async def lookup_help(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "🔎 **V3.1 Lookup Feature**\n\n"
+        "`/lookup_associate user:@associate` — View profile, certs, metrics, station, and idle time\n"
+        "`/set_station user:@associate station:Transship Door 143` — Assign station/function\n"
+        "`/mark_active user:@associate note:Checked at lane 120` — Reset idle timer after check-in\n"
+        "`/idle_report department:Ship Dock` — View idle clocked-in associates\n\n"
+        "Idle time is based on the associate's last `/task`, `/clockin`, `/set_station`, or `/mark_active`.",
+        ephemeral=True
+    )
 
 if not DISCORD_TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN in .env")

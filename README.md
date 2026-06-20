@@ -109,3 +109,84 @@ Make sure the bot has:
 - Send Messages
 - Embed Links
 - Use Slash Commands
+
+
+## Version 2.1 Department OM Authority
+
+New commands:
+
+- `/assign_department_om`
+- `/my_authority`
+
+Example setup:
+
+1. Make yourself L6:
+   `/appoint_rank user:@you rank:L6 Operations Manager`
+
+2. Assign yourself over Ship Dock:
+   `/assign_department_om user:@you department:Ship Dock Operations Manager`
+
+This gives the L6 OM authority over Shipping Sorter, Transship, Ship Dock, Lower Mezzanine, Upper Mezzanine, Quality, VRETS, TDR Operator, and Flow Desk.
+
+
+## Version 3.0 FC Operations Simulator
+
+Major additions:
+
+- FHN/BHN shift system
+- Dynamic leadership directory
+- `/who_is_my_manager`
+- `/department_leadership`
+- `/org_chart`
+- `/manager_dashboard`
+- ICQA department and ICQA tasks
+- Expanded certifications
+- Process Guide appointments
+- Area Manager assignments
+- PA assignments
+- UPT/PTO/Vacation balances
+- Recognition and Swag Points
+- Dock doors 120-150 and 201-222
+- TDR door controls
+- Shift handoff
+- Site status dashboard
+
+Recommended setup:
+
+1. `/appoint_rank user:@you rank:L6 Operations Manager`
+2. `/assign_department_om user:@you department:Ship Dock Operations Manager`
+3. `/assign_shift user:@you shift:Front Half Nights`
+4. `/my_authority`
+5. `/manager_dashboard`
+
+
+## Version 3.1 PA Lookup Feature
+
+New lookup commands:
+
+- `/lookup_associate`
+- `/set_station`
+- `/mark_active`
+- `/idle_report`
+- `/lookup_help`
+
+This lets PAs, PGs, Learning Ambassadors, AMs, OMs, Senior OMs, and GMs view associate details such as:
+
+- Rank
+- Department
+- Area
+- Shift
+- Assignment
+- Station
+- Clock status
+- Station status
+- Idle time
+- Productivity
+- Quality
+- Safety
+- Attendance
+- Write-ups
+- Morale
+- Certifications
+
+Idle time updates when an associate clocks in, completes a task, is assigned a station, or is marked active by leadership.

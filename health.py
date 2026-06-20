@@ -24,7 +24,8 @@ DEPARTMENT_HEALTH = {
     "Lower Mezzanine": {"health": 100, "utilization": 100, "lane_jams": 0},
     "Upper Mezzanine": {"health": 100, "feed_balance": 100, "flow_rate": 100},
     "Quality": {"health": 100, "audits": 0, "defects": 0, "tdr_compliance": 100},
-    "VRETS": {"health": 100, "return_backlog": 0, "quality": 100}
+    "VRETS": {"health": 100, "return_backlog": 0, "quality": 100},
+    "ICQA": {"health": 100, "inventory_accuracy": 100, "open_variances": 0, "resolved_variances": 0, "bin_quality": 100}
 }
 
 def clamp_area(area):
