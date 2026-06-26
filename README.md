@@ -57,3 +57,40 @@ V5 is built around:
 - AI TOM/trailer handling
 - persistent building state
 - autonomous operational events
+
+
+## V5 Full Simulator Build
+
+This build expands the playable simulator with more systems:
+
+- Live operations
+- Department summaries
+- Labor moves
+- AI TOM / Yard
+- CPT recovery
+- Action items
+- Training classes
+- Safety reports
+- Audits
+- Recognition
+- Coaching
+- Write-ups
+- AI promotions
+- AI conversations
+- Radio
+- Standups
+- Shift handoffs
+- Station board
+- HR/PXT cases
+- Applications
+- Interviews
+- AI logs
+- Simulate day/week
+- Pause/resume/speed labels
+- Building records
+- Site goals
+
+Start with:
+- `/v5_start`
+- `/v5_panel`
+- `/v5_full_help`

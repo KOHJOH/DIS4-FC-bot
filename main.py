@@ -280,6 +280,348 @@ async def v5_events(interaction: discord.Interaction):
     lines = [f"• **{e['time']}** — {e['type']}: {e['message']}" for e in events]
     await interaction.response.send_message("🚨 **Recent Events**\n\n" + "\n".join(lines))
 
+
+
+
+# =========================
+# V5 FULL SIMULATOR COMMAND PACK
+# =========================
+
+@bot.tree.command(name="v5_live_operations", description="Live operations summary.")
+async def v5_live_operations(interaction: discord.Interaction):
+    state = load_state(); recs = recommendations(state); c = cpt_summary(state)
+    await interaction.response.send_message(
+        f"📡 **LIVE OPERATIONS**\n\nHealth: **{state['building']['building_health']}%**\nForecast: **{state['building']['forecast_level']}**\nCPT Compliance: **{state['building']['cpt_compliance']}%**\nOpen CPTs: **{c['open']}**\nAt Risk: **{c['at_risk']}**\nMissorts: **{state['building']['missorts']}**\n\n🧠 **AI Brain**\n" + "\n".join([f"• {r}" for r in recs])
+    )
+
+@bot.tree.command(name="v5_department", description="View department summary.")
+async def v5_department(interaction: discord.Interaction, department: str):
+    state = load_state()
+    if department not in DEPARTMENTS:
+        return await interaction.response.send_message("❌ Invalid department.", ephemeral=True)
+    d = summarize_department(state, department)
+    s = d["staffing"]
+    await interaction.response.send_message(
+        f"🏢 **{department} Summary**\n\nHealth: **{d['health']}%**\nHeadcount: **{d['headcount']}**\nAvg UPH: **{d['avg_uph']}**\nAvg Quality: **{d['avg_quality']}%**\nAvg Morale: **{d['avg_morale']}%**\n\nScheduled: **{s['scheduled']}**\nClocked In: **{s['clocked_in']}**\nCall-Offs: **{s['calloffs']}**"
+    )
+
+@bot.tree.command(name="v5_department_health", description="View all department health.")
+async def v5_department_health(interaction: discord.Interaction):
+    state = load_state()
+    lines = []
+    for d, h in state["department_health"].items():
+        icon = "🟢" if h >= 90 else "🟡" if h >= 75 else "🔴"
+        lines.append(f"{icon} **{d}:** {h}%")
+    await interaction.response.send_message("🏥 **Department Health**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_labor_move", description="Move AI labor between departments.")
+async def v5_labor_move(interaction: discord.Interaction, from_department: str, to_department: str, amount: int):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state()
+    ok, msg = labor_move_ai(state, from_department, to_department, amount)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_yard", description="View AI TOM yard status.")
+async def v5_yard(interaction: discord.Interaction):
+    state = load_state(); y = yard_status(state)
+    await interaction.response.send_message(
+        f"🚛 **AI TOM Yard Status**\n\nPending Pulls: **{y['pending_pulls']}**\nPending Spots: **{y['pending_spots']}**\nCongestion: **{y['yard_congestion']}**\nAvailable Doors: **{y['available_doors']}**\nOccupied Doors: **{y['occupied_doors']}**"
+    )
+
+@bot.tree.command(name="v5_request_pull", description="Request AI TOM pull for trailer.")
+async def v5_request_pull(interaction: discord.Interaction, trailer_id: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state()
+    ok, msg = request_tom_pull(state, trailer_id)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_trailer", description="View trailer details.")
+async def v5_trailer(interaction: discord.Interaction, trailer_id: str):
+    state = load_state()
+    t = next((x for x in state["trailers"] if x["id"].lower() == trailer_id.lower()), None)
+    if not t:
+        return await interaction.response.send_message("❌ Trailer not found.", ephemeral=True)
+    await interaction.response.send_message(
+        f"🚛 **Trailer {t['id']}**\n\nDoor: **{t['door']}**\nType: **{t['type']}**\nCPT: **{t['cpt']}**\nPackages Remaining: **{t['packages_remaining']}**\nStatus: **{t['status']}**\nTOM: **{t.get('tom_status','Docked')}**\nPull Requested: **{t['pull_requested']}**"
+    )
+
+@bot.tree.command(name="v5_cpt_recovery", description="Launch CPT recovery.")
+async def v5_cpt_recovery(interaction: discord.Interaction):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state()
+    state["department_health"]["Ship Dock"] = min(100, state["department_health"]["Ship Dock"] + 5)
+    state["building"]["cpt_compliance"] = min(100, round(state["building"]["cpt_compliance"] + 0.5, 1))
+    create_action_item(state, "CPT Recovery", "Ship Dock AM", "Current Shift")
+    save_state(state)
+    await interaction.response.send_message("🚨 **CPT Recovery Launched**\n\n+5 Ship Dock Health\n+0.5 CPT Compliance\nAction item created.")
+
+@bot.tree.command(name="v5_action_item", description="Create action item.")
+async def v5_action_item(interaction: discord.Interaction, title: str, owner: str = "AI Leadership", due: str = "Next Shift"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); item = create_action_item(state, title, owner, due)
+    await interaction.response.send_message(f"📋 **Action Item Created**\n\nID: **{item['id']}**\nTitle: **{title}**\nOwner: **{owner}**\nDue: **{due}**")
+
+@bot.tree.command(name="v5_action_items", description="View action items.")
+async def v5_action_items(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["action_items"]:
+        return await interaction.response.send_message("No action items.")
+    lines = [f"• **{i['id']}** — {i['title']} | Owner: {i['owner']} | Due: {i['due']} | {i['status']}" for i in state["action_items"][-15:]]
+    await interaction.response.send_message("📋 **Action Items**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_start_training", description="Schedule AI training class.")
+async def v5_start_training(interaction: discord.Interaction, topic: str, seats: int = 8):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); c = create_training_class(state, topic, seats)
+    await interaction.response.send_message(f"🎓 **Training Scheduled**\n\nID: **{c['id']}**\nTopic: **{topic}**\nRegistered: **{c['registered']} / {c['seats']}**")
+
+@bot.tree.command(name="v5_complete_training", description="Complete AI training class.")
+async def v5_complete_training(interaction: discord.Interaction, class_id: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = complete_training_class(state, class_id)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_training_classes", description="View training classes.")
+async def v5_training_classes(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["training_classes"]:
+        return await interaction.response.send_message("No training classes.")
+    lines = [f"• **{c['id']}** — {c['topic']} | {c['registered']}/{c['seats']} | {c['status']}" for c in state["training_classes"][-15:]]
+    await interaction.response.send_message("🎓 **Training Classes**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_safety_report", description="Open safety report.")
+async def v5_safety_report(interaction: discord.Interaction, issue: str, department: str = "Ship Dock", severity: str = "Medium"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state()
+    if department not in DEPARTMENTS:
+        return await interaction.response.send_message("❌ Invalid department.", ephemeral=True)
+    r = create_safety_report(state, issue, department, severity)
+    await interaction.response.send_message(f"🦺 **Safety Report Opened**\n\nID: **{r['id']}**\nIssue: **{issue}**\nDepartment: **{department}**\nSeverity: **{severity}**")
+
+@bot.tree.command(name="v5_close_safety", description="Close safety report.")
+async def v5_close_safety(interaction: discord.Interaction, report_id: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = close_safety_report(state, report_id)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_safety_reports", description="View safety reports.")
+async def v5_safety_reports(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["safety_reports"]:
+        return await interaction.response.send_message("No safety reports.")
+    lines = [f"• **{r['id']}** — {r['issue']} | {r['department']} | {r['severity']} | {r['status']}" for r in state["safety_reports"][-15:]]
+    await interaction.response.send_message("🦺 **Safety Reports**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_audit", description="Conduct department audit.")
+async def v5_audit(interaction: discord.Interaction, department: str, audit_type: str = "Safety Audit"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state()
+    if department not in DEPARTMENTS:
+        return await interaction.response.send_message("❌ Invalid department.", ephemeral=True)
+    a = conduct_audit(state, department, audit_type)
+    await interaction.response.send_message(f"🔎 **Audit Complete**\n\nDepartment: **{department}**\nType: **{audit_type}**\nScore: **{a['score']}%**")
+
+@bot.tree.command(name="v5_audits", description="View audit history.")
+async def v5_audits(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["audits"]:
+        return await interaction.response.send_message("No audits yet.")
+    lines = [f"• **{a['id']}** — {a['department']} | {a['type']} | {a['score']}%" for a in state["audits"][-15:]]
+    await interaction.response.send_message("🔎 **Audit History**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_recognize", description="Recognize AI associate.")
+async def v5_recognize(interaction: discord.Interaction, name: str, reason: str = "Great work"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = recognize_ai(state, name, reason)
+    await interaction.response.send_message(("🏆 " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_coach", description="Coach AI associate.")
+async def v5_coach(interaction: discord.Interaction, name: str, topic: str = "Productivity"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = coach_ai(state, name, topic)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_writeup", description="Write up AI associate.")
+async def v5_writeup(interaction: discord.Interaction, name: str, reason: str = "Policy violation"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = writeup_ai(state, name, reason)
+    await interaction.response.send_message(("📝 " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_promote_ai", description="Promote AI associate.")
+async def v5_promote_ai(interaction: discord.Interaction, name: str, new_rank: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = promote_ai(state, name, new_rank)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_talk", description="Talk to AI manager or associate.")
+async def v5_talk(interaction: discord.Interaction, target: str = "manager"):
+    state = load_state()
+    await interaction.response.send_message("💬 **AI Conversation**\n\n" + ai_conversation(state, target))
+
+@bot.tree.command(name="v5_radio", description="Send leadership radio message.")
+async def v5_radio(interaction: discord.Interaction, message: str):
+    state = load_state()
+    state["events"].append({"time": "Now", "type": "Radio", "message": f"Jump radioed: {message}"})
+    save_state(state)
+    await interaction.response.send_message(f"📻 **FLOW RADIO**\n\n{message}\n\n— Site Leader")
+
+@bot.tree.command(name="v5_standup", description="Start shift standup.")
+async def v5_standup(interaction: discord.Interaction):
+    state = load_state()
+    await interaction.response.send_message(
+        f"📋 **SHIFT STANDUP**\n\nShift: **{state['building']['shift']}**\nForecast: **{state['building']['forecast_level']}**\nSafety: **{state['building']['safety']}%**\nQuality: **{state['building']['quality']}%**\nCPT: **{state['building']['cpt_compliance']}%**\nFocus: **Protect CPTs, reduce missorts, keep safety clean.**"
+    )
+
+@bot.tree.command(name="v5_handoff", description="Generate shift handoff.")
+async def v5_handoff(interaction: discord.Interaction):
+    state = load_state(); c = cpt_summary(state)
+    await interaction.response.send_message(
+        f"📋 **SHIFT HANDOFF**\n\nHealth: **{state['building']['building_health']}%**\nOpen CPTs: **{c['open']}**\nAt Risk: **{c['at_risk']}**\nMissorts: **{state['building']['missorts']}**\nOpen SEVs: **{state['building'].get('open_sevs',0)}**\n\nNotes: Watch Ship Dock and Quality. Review manager requests before next volume push."
+    )
+
+@bot.tree.command(name="v5_station_assign", description="Assign AI associate to station.")
+async def v5_station_assign(interaction: discord.Interaction, name: str, station: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = station_assign(state, name, station)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_station_board", description="View station assignments.")
+async def v5_station_board(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["station_board"]:
+        return await interaction.response.send_message("No station assignments yet.")
+    lines = [f"• **{station}:** {name}" for station, name in list(state["station_board"].items())[-20:]]
+    await interaction.response.send_message("📍 **Station Board**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_hr_case", description="Open HR/PXT case.")
+async def v5_hr_case(interaction: discord.Interaction, case_type: str, associate: str = "AI Associate"):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); case = open_hr_case(state, case_type, associate)
+    await interaction.response.send_message(f"📁 **PXT Case Opened**\n\nID: **{case['id']}**\nType: **{case_type}**\nAssociate: **{associate}**")
+
+@bot.tree.command(name="v5_hr_cases", description="View HR/PXT cases.")
+async def v5_hr_cases(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["hr_cases"]:
+        return await interaction.response.send_message("No HR cases.")
+    lines = [f"• **{c['id']}** — {c['type']} | {c['associate']} | {c['status']}" for c in state["hr_cases"][-15:]]
+    await interaction.response.send_message("📁 **PXT Cases**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_application", description="Create AI application.")
+async def v5_application(interaction: discord.Interaction, name: str, position: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); app = create_application(state, name, position)
+    await interaction.response.send_message(f"📄 **Application Created**\n\nID: **{app['id']}**\nName: **{name}**\nPosition: **{position}**\nScore: **{app['score']}%**")
+
+@bot.tree.command(name="v5_applications", description="View applications.")
+async def v5_applications(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["applications"]:
+        return await interaction.response.send_message("No applications.")
+    lines = [f"• **{a['id']}** — {a['name']} | {a['position']} | {a['status']} | Score {a['score']}%" for a in state["applications"][-15:]]
+    await interaction.response.send_message("📄 **Applications**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_schedule_interview", description="Schedule AI interview.")
+async def v5_schedule_interview(interaction: discord.Interaction, name: str, position: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); inv = schedule_interview(state, name, position)
+    await interaction.response.send_message(f"🗣️ **Interview Scheduled**\n\nID: **{inv['id']}**\nName: **{name}**\nPosition: **{position}**")
+
+@bot.tree.command(name="v5_record_interview", description="Record AI interview score.")
+async def v5_record_interview(interaction: discord.Interaction, interview_id: str):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); ok, msg = record_interview(state, interview_id)
+    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg)
+
+@bot.tree.command(name="v5_interviews", description="View interviews.")
+async def v5_interviews(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state)
+    if not state["interviews"]:
+        return await interaction.response.send_message("No interviews.")
+    lines = [f"• **{i['id']}** — {i['name']} | {i['position']} | {i['status']} | Score: {i['score']}" for i in state["interviews"][-15:]]
+    await interaction.response.send_message("🗣️ **Interviews**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_ai_logs", description="View AI logs/events.")
+async def v5_ai_logs(interaction: discord.Interaction):
+    state = load_state()
+    events = state["events"][-20:]
+    if not events:
+        return await interaction.response.send_message("No logs yet.")
+    lines = [f"• **{e['time']}** — {e['type']}: {e['message']}" for e in events]
+    await interaction.response.send_message("🤖 **AI Logs**\n\n" + "\n".join(lines))
+
+@bot.tree.command(name="v5_sim_day", description="Simulate one full day.")
+async def v5_sim_day(interaction: discord.Interaction):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); simulate_day(state)
+    await interaction.response.send_message(f"📅 **Day Simulated**\n\nCurrent Day: **{state['building']['day']}**\nHealth: **{state['building']['building_health']}%**")
+
+@bot.tree.command(name="v5_sim_week", description="Simulate one full week.")
+async def v5_sim_week(interaction: discord.Interaction):
+    if not owner_only(interaction):
+        return await interaction.response.send_message("❌ Owner-only.", ephemeral=True)
+    state = load_state(); simulate_week(state)
+    await interaction.response.send_message(f"📆 **Week Simulated**\n\nCurrent Day: **{state['building']['day']}**\nHealth: **{state['building']['building_health']}%**")
+
+@bot.tree.command(name="v5_pause", description="Pause simulation.")
+async def v5_pause(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state); state["paused"] = True; save_state(state)
+    await interaction.response.send_message("⏸️ Simulation paused.")
+
+@bot.tree.command(name="v5_resume", description="Resume simulation.")
+async def v5_resume(interaction: discord.Interaction):
+    state = load_state(); ensure_full_systems(state); state["paused"] = False; save_state(state)
+    await interaction.response.send_message("▶️ Simulation resumed.")
+
+@bot.tree.command(name="v5_speed", description="Set sim speed label.")
+async def v5_speed(interaction: discord.Interaction, speed: str):
+    state = load_state(); ensure_full_systems(state); state["sim_speed"] = speed.upper(); save_state(state)
+    await interaction.response.send_message(f"⚡ Simulation speed set to **{speed.upper()}**.")
+
+@bot.tree.command(name="v5_records", description="View building records.")
+async def v5_records(interaction: discord.Interaction):
+    state = load_state(); r = state["records"]
+    await interaction.response.send_message(f"🏆 **Building Records**\n\nBest CPT Compliance: **{r['best_cpt_compliance']}%**\nHighest Building Health: **{r['highest_building_health']}%**\nMost CPT Saves: **{r['most_cpt_saves']}**")
+
+@bot.tree.command(name="v5_site_goal", description="Set site goal.")
+async def v5_site_goal(interaction: discord.Interaction, goal: str):
+    state = load_state(); state["site_goal"] = goal; save_state(state)
+    await interaction.response.send_message(f"🎯 **Site Goal Set**\n\n{goal}")
+
+@bot.tree.command(name="v5_full_help", description="List full simulator command categories.")
+async def v5_full_help(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "🏢 **V5 Full Simulator Command Categories**\n\n"
+        "**Core:** `/v5_panel`, `/v5_dashboard`, `/v5_live_operations`, `/v5_foresight`\n"
+        "**Simulation:** `/v5_sim_hour`, `/v5_sim_shift`, `/v5_sim_day`, `/v5_sim_week`, `/v5_pause`, `/v5_resume`\n"
+        "**Managers:** `/v5_manager_request`, `/v5_manager_messages`, `/v5_manager_meeting`, `/v5_approve`, `/v5_deny`\n"
+        "**Ship Dock/TOM:** `/v5_cpt`, `/v5_trailer`, `/v5_depart`, `/v5_request_pull`, `/v5_yard`, `/v5_cpt_recovery`\n"
+        "**AI People:** `/v5_ai_associate`, `/v5_talk`, `/v5_recognize`, `/v5_coach`, `/v5_writeup`, `/v5_promote_ai`\n"
+        "**Labor/Departments:** `/v5_staffing`, `/v5_department`, `/v5_department_health`, `/v5_labor_move`\n"
+        "**Learning/Safety/HR:** `/v5_start_training`, `/v5_safety_report`, `/v5_audit`, `/v5_hr_case`, `/v5_application`, `/v5_schedule_interview`\n"
+        "**Meetings:** `/v5_standup`, `/v5_handoff`, `/v5_business_review`\n"
+        "**Logs:** `/v5_events`, `/v5_ai_logs`, `/v5_records`"
+    )
+
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing. Add it to Railway variables.")
 

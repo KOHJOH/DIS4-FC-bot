@@ -467,3 +467,287 @@ def business_review(state):
         "staffing": get_staffing(state),
         "cpt": cpt_summary(state)
     }
+
+
+# =========================
+# V5 FULL SIMULATOR SYSTEMS
+# =========================
+
+def ensure_full_systems(state):
+    state.setdefault("paused", False)
+    state.setdefault("sim_speed", "NORMAL")
+    state.setdefault("ai_logs", [])
+    state.setdefault("action_items", [])
+    state.setdefault("hr_cases", [])
+    state.setdefault("applications", [])
+    state.setdefault("interviews", [])
+    state.setdefault("training_classes", [])
+    state.setdefault("safety_reports", [])
+    state.setdefault("audits", [])
+    state.setdefault("rumors", [])
+    state.setdefault("conflicts", [])
+    state.setdefault("recognition_log", [])
+    state.setdefault("promotions_log", [])
+    state.setdefault("station_board", {})
+    state.setdefault("yard", {
+        "pending_pulls": 0,
+        "pending_spots": 0,
+        "yard_congestion": "NORMAL",
+        "available_doors": 14,
+        "occupied_doors": 38
+    })
+    return state
+
+def summarize_department(state, department):
+    ensure_full_systems(state)
+    associates = [a for a in state["ai_associates"] if a["department"] == department]
+    health = state["department_health"].get(department, 100)
+    avg_uph = int(sum(a["uph"] for a in associates) / max(1, len(associates)))
+    avg_quality = int(sum(a["quality"] for a in associates) / max(1, len(associates)))
+    avg_morale = int(sum(a["morale"] for a in associates) / max(1, len(associates)))
+    return {
+        "department": department,
+        "health": health,
+        "headcount": len(associates),
+        "avg_uph": avg_uph,
+        "avg_quality": avg_quality,
+        "avg_morale": avg_morale,
+        "staffing": get_staffing(state, department)
+    }
+
+def labor_move_ai(state, from_department, to_department, amount):
+    ensure_full_systems(state)
+    if from_department not in DEPARTMENTS or to_department not in DEPARTMENTS:
+        return False, "Invalid department."
+    candidates = [a for a in state["ai_associates"] if a["department"] == from_department and a["status"] in ["Working", "Scheduled"]]
+    moved = candidates[:max(0, min(amount, len(candidates)))]
+    for a in moved:
+        old = a["department"]
+        a["department"] = to_department
+        a["area"] = random.choice(DEPARTMENTS[to_department])
+        a["station"] = a["area"]
+        a["status"] = "Helping Another Area"
+        a["history"].append(f"Labor shared from {old} to {to_department}.")
+    state["department_health"][to_department] = min(100, state["department_health"][to_department] + len(moved))
+    state["department_health"][from_department] = max(40, state["department_health"][from_department] - max(0, len(moved)//2))
+    state["events"].append({"time": datetime.now().strftime("%H:%M"), "type": "Labor Move", "message": f"{len(moved)} AI associates moved from {from_department} to {to_department}."})
+    save_state(state)
+    return True, f"Moved {len(moved)} AI associates from {from_department} to {to_department}."
+
+def create_action_item(state, title, owner="AI Leadership", due="Next Shift"):
+    ensure_full_systems(state)
+    item = {"id": str(len(state["action_items"]) + 1), "title": title, "owner": owner, "due": due, "status": "Open"}
+    state["action_items"].append(item)
+    save_state(state)
+    return item
+
+def create_training_class(state, topic, seats=8):
+    ensure_full_systems(state)
+    attendees = random.sample(state["ai_associates"], min(seats, len(state["ai_associates"])))
+    item = {
+        "id": str(len(state["training_classes"]) + 1),
+        "topic": topic,
+        "seats": seats,
+        "registered": len(attendees),
+        "status": "Scheduled",
+        "attendees": [a["name"] for a in attendees]
+    }
+    state["training_classes"].append(item)
+    save_state(state)
+    return item
+
+def complete_training_class(state, class_id):
+    ensure_full_systems(state)
+    item = next((c for c in state["training_classes"] if c["id"] == str(class_id)), None)
+    if not item:
+        return False, "Class not found."
+    if item["status"] == "Completed":
+        return False, "Class already completed."
+    item["status"] = "Completed"
+    topic = item["topic"]
+    for name in item["attendees"]:
+        a = next((x for x in state["ai_associates"] if x["name"] == name), None)
+        if a and topic not in a["certifications"]:
+            a["certifications"].append(topic)
+            a["morale"] = min(100, a["morale"] + 2)
+    state["department_health"]["Learning"] = min(100, state["department_health"]["Learning"] + 3)
+    save_state(state)
+    return True, f"Completed {topic} class. {len(item['attendees'])} AI associates trained."
+
+def create_safety_report(state, issue, department="Ship Dock", severity="Medium"):
+    ensure_full_systems(state)
+    report = {"id": str(len(state["safety_reports"]) + 1), "issue": issue, "department": department, "severity": severity, "status": "Open"}
+    state["safety_reports"].append(report)
+    state["building"]["safety"] = max(70, state["building"]["safety"] - (3 if severity.lower()=="high" else 1))
+    state["events"].append({"time": datetime.now().strftime("%H:%M"), "type": "Safety Report", "message": f"{severity} safety issue reported in {department}: {issue}"})
+    save_state(state)
+    return report
+
+def close_safety_report(state, report_id):
+    ensure_full_systems(state)
+    r = next((x for x in state["safety_reports"] if x["id"] == str(report_id)), None)
+    if not r:
+        return False, "Safety report not found."
+    r["status"] = "Closed"
+    state["building"]["safety"] = min(100, state["building"]["safety"] + 2)
+    state["department_health"][r["department"]] = min(100, state["department_health"].get(r["department"], 90) + 2)
+    save_state(state)
+    return True, f"Closed safety report {report_id}."
+
+def conduct_audit(state, department, audit_type="Safety Audit"):
+    ensure_full_systems(state)
+    score = random.randint(78, 100)
+    audit = {"id": str(len(state["audits"]) + 1), "department": department, "type": audit_type, "score": score, "time": datetime.now().strftime("%H:%M")}
+    state["audits"].append(audit)
+    if score >= 90:
+        state["department_health"][department] = min(100, state["department_health"].get(department, 90) + 3)
+    else:
+        state["department_health"][department] = max(40, state["department_health"].get(department, 90) - 3)
+    save_state(state)
+    return audit
+
+def recognize_ai(state, name, reason="Great work"):
+    ensure_full_systems(state)
+    a = next((x for x in state["ai_associates"] if name.lower() in x["name"].lower()), None)
+    if not a:
+        return False, "AI associate not found."
+    a["positive_feedback"] += 1
+    a["morale"] = min(100, a["morale"] + 8)
+    a["trust"] = min(100, a["trust"] + 3)
+    log = {"name": a["name"], "reason": reason, "time": datetime.now().strftime("%H:%M")}
+    state["recognition_log"].append(log)
+    save_state(state)
+    return True, f"Recognized {a['name']}: {reason}"
+
+def coach_ai(state, name, topic="Productivity"):
+    ensure_full_systems(state)
+    a = next((x for x in state["ai_associates"] if name.lower() in x["name"].lower()), None)
+    if not a:
+        return False, "AI associate not found."
+    if topic.lower() == "quality":
+        a["quality"] = min(100, a["quality"] + 2)
+    elif topic.lower() == "safety":
+        a["safety"] = min(100, a["safety"] + 2)
+    else:
+        a["uph"] += random.randint(3, 8)
+    a["stress"] = min(100, a["stress"] + 2)
+    a["history"].append(f"Coached on {topic}.")
+    save_state(state)
+    return True, f"Coached {a['name']} on {topic}."
+
+def writeup_ai(state, name, reason="Policy violation"):
+    ensure_full_systems(state)
+    a = next((x for x in state["ai_associates"] if name.lower() in x["name"].lower()), None)
+    if not a:
+        return False, "AI associate not found."
+    a["writeups"] += 1
+    a["morale"] = max(30, a["morale"] - 10)
+    a["trust"] = max(10, a["trust"] - 5)
+    a["history"].append(f"Write-up: {reason}")
+    save_state(state)
+    return True, f"Issued write-up to {a['name']}: {reason}"
+
+def promote_ai(state, name, new_rank):
+    ensure_full_systems(state)
+    if new_rank not in RANKS:
+        return False, "Invalid rank."
+    a = next((x for x in state["ai_associates"] if name.lower() in x["name"].lower()), None)
+    if not a:
+        return False, "AI associate not found."
+    old = a["rank"]
+    a["rank"] = new_rank
+    a["morale"] = min(100, a["morale"] + 15)
+    a["trust"] = min(100, a["trust"] + 6)
+    state["promotions_log"].append({"name": a["name"], "from": old, "to": new_rank, "time": datetime.now().strftime("%H:%M")})
+    save_state(state)
+    return True, f"Promoted {a['name']} from {old} to {new_rank}."
+
+def ai_conversation(state, target="manager"):
+    ensure_full_systems(state)
+    if target == "manager":
+        req = generate_manager_request(state)
+        return f"{req['manager_name']} ({req['manager_role']}): {req['message']} Recommendation: {req['recommendation']}"
+    a = random.choice(state["ai_associates"])
+    lines = [
+        f"{a['name']}: I’m currently in {a['department']} / {a['area']}. Morale is {a['morale']}%, stress is {a['stress']}%.",
+        f"{a['name']}: I want to work toward {a['career_goal']}.",
+        f"{a['name']}: My current station is {a['station']} and my status is {a['status']}.",
+        f"{a['name']}: I think {a['department']} could use more support if volume keeps rising."
+    ]
+    return random.choice(lines)
+
+def yard_status(state):
+    ensure_full_systems(state)
+    ready = sum(1 for t in state["trailers"] if t["status"] == "Ready" and not t["departed"])
+    risk = sum(1 for t in state["trailers"] if t["status"] == "At Risk" and not t["departed"])
+    state["yard"]["pending_pulls"] = ready
+    state["yard"]["pending_spots"] = random.randint(0, 5)
+    state["yard"]["yard_congestion"] = "HIGH" if risk >= 4 else "NORMAL"
+    save_state(state)
+    return state["yard"]
+
+def request_tom_pull(state, trailer_id):
+    ensure_full_systems(state)
+    t = next((x for x in state["trailers"] if x["id"].lower() == trailer_id.lower()), None)
+    if not t:
+        return False, "Trailer not found."
+    t["pull_requested"] = True
+    t["tom_status"] = "Pull Requested"
+    state["yard"]["pending_pulls"] += 1
+    state["events"].append({"time": datetime.now().strftime("%H:%M"), "type": "TOM Request", "message": f"TOM pull requested for {t['id']} at Door {t['door']}."})
+    save_state(state)
+    return True, f"TOM pull requested for {t['id']}."
+
+def station_assign(state, name, station):
+    ensure_full_systems(state)
+    a = next((x for x in state["ai_associates"] if name.lower() in x["name"].lower()), None)
+    if not a:
+        return False, "AI associate not found."
+    a["station"] = station
+    a["status"] = "Working"
+    state["station_board"][station] = a["name"]
+    save_state(state)
+    return True, f"{a['name']} assigned to {station}."
+
+def open_hr_case(state, case_type, associate="AI Associate"):
+    ensure_full_systems(state)
+    case = {"id": str(len(state["hr_cases"]) + 1), "type": case_type, "associate": associate, "status": "Open"}
+    state["hr_cases"].append(case)
+    save_state(state)
+    return case
+
+def create_application(state, name, position):
+    ensure_full_systems(state)
+    app = {"id": str(len(state["applications"]) + 1), "name": name, "position": position, "status": "Under Review", "score": random.randint(65, 98)}
+    state["applications"].append(app)
+    save_state(state)
+    return app
+
+def schedule_interview(state, name, position):
+    ensure_full_systems(state)
+    interview = {"id": str(len(state["interviews"]) + 1), "name": name, "position": position, "status": "Scheduled", "score": None}
+    state["interviews"].append(interview)
+    save_state(state)
+    return interview
+
+def record_interview(state, interview_id):
+    ensure_full_systems(state)
+    item = next((x for x in state["interviews"] if x["id"] == str(interview_id)), None)
+    if not item:
+        return False, "Interview not found."
+    item["status"] = "Completed"
+    item["score"] = random.randint(60, 100)
+    save_state(state)
+    return True, f"Interview completed. Score: {item['score']}%."
+
+def simulate_day(state):
+    for _ in range(10):
+        simulate_hour(state)
+    state["building"]["day"] += 1
+    state["events"].append({"time": datetime.now().strftime("%H:%M"), "type": "Day Complete", "message": f"Day {state['building']['day']} started."})
+    save_state(state)
+
+def simulate_week(state):
+    for _ in range(7):
+        simulate_day(state)
+    save_state(state)
